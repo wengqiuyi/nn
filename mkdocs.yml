@@ -53,3 +53,4 @@ nav:
 markdown_extensions:
   - admonition
   - mdx_math
+  - tables

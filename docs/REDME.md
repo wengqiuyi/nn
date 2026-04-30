@@ -27,9 +27,9 @@
 2.多指标分析：支持reward、loss、steps_per_sec、updates_per_sec等多个指标的对比。
 3.趋势平滑：通过--smooth N参数提供滑动平均平滑，便于观察长期趋势，过滤短期噪声。
 4.环境兼容性：通过设置MPLCONFIGDIR环境变量，彻底解决了Matplotlib在无头服务器上的缓存警告与启动慢问题。
-![Reward 对比图（smooth=20）](image-4.png)
+![Reward 对比图（smooth=20）](../image-4.png)
 
-![Loss 对比图（smooth=20）](image-3.png)
+![Loss 对比图（smooth=20）](../image-3.png)
 ## 3. 量化结果与效果分析
 | 评估指标 | Baseline (原始配置) | Improved (改进配置) | 变化 | 含义 |
 | :--- | :--- | :--- | :--- | :--- |

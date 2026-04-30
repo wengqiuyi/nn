@@ -46,7 +46,7 @@ copyright: OpenHUTB 版权所有 &copy; {year}
 
 nav:
 - 首页: 'index.md'
-- CarRacing DQN/DoubleDQN：训练改进与可视化对比: 'REDME.md'
+- CarRacing DQN/DoubleDQN：训练改进与可视化对比: 'car_racing_dqn_improvements.md'
 
 
 # - mdx_math 用于行内公式显示

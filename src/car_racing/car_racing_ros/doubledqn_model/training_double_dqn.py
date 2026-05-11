@@ -198,7 +198,7 @@ while episode < play_n_episodes and (max_timesteps is None or timestep_n < max_t
         done = terminated or truncated
         
         # 存储经验
-        driver.store(state, action, reward, new_state, done)
+        driver.store(state, action, reward, new_state, terminated, truncated)
         
         state = new_state
         if max_timesteps is not None and timestep_n >= max_timesteps:

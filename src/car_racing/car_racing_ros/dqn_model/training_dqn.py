@@ -226,7 +226,7 @@ while episode < play_n_episodes and (max_timesteps is None or timestep_n < max_t
         # -------------------------------------------------
         # 4.3 存储经验到回放缓冲区
         # -------------------------------------------------
-        driver.store(state, action, reward, new_state, done)
+        driver.store(state, action, reward, new_state, terminated, truncated)
         
         # 更新状态
         state = new_state

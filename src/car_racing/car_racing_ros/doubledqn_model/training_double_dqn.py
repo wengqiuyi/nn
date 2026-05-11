@@ -195,12 +195,12 @@ while episode < play_n_episodes and (max_timesteps is None or timestep_n < max_t
         # 与环境交互
         new_state, reward, terminated, truncated, info = env.step(action)
         episode_reward += reward
+        done = terminated or truncated
         
         # 存储经验
-        driver.store(state, action, reward, new_state, terminated)
+        driver.store(state, action, reward, new_state, done)
         
         state = new_state
-        done = terminated or truncated
         if max_timesteps is not None and timestep_n >= max_timesteps:
             break
         

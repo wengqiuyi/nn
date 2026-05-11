@@ -265,7 +265,7 @@ class BaseAgent:
         self.policy_net = self.policy_net.to(self.device)
         self.frozen_net = self.frozen_net.to(self.device)
 
-    def store(self, state, action, reward, new_state, terminated):
+    def store(self, state, action, reward, new_state, done):
         """
         将经验存储到回放缓冲区
         
@@ -274,7 +274,7 @@ class BaseAgent:
         - action: 执行的动作
         - reward: 获得的奖励
         - new_state: 下一个状态
-        - terminated: 是否结束
+        - done: 本步是否结束（terminated 或 truncated）
         """
         state_arr = np.asarray(state)
         new_state_arr = np.asarray(new_state)
@@ -283,7 +283,7 @@ class BaseAgent:
             "action": torch.as_tensor(action, dtype=torch.int64),
             "reward": torch.as_tensor(reward, dtype=torch.float32),
             "new_state": torch.as_tensor(new_state_arr),
-            "terminated": torch.as_tensor(terminated, dtype=torch.bool),
+            "terminated": torch.as_tensor(done, dtype=torch.bool),
         }, batch_size=[]))
 
     def get_samples(self, batch_size):

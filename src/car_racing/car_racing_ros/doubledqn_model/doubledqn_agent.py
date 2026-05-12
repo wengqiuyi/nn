@@ -139,14 +139,14 @@ class DoubleDQNAgent(BaseAgent):
         4. 应用软更新到目标网络
         """
         self.n_updates += 1
-        states, actions, rewards, new_states, terminateds = self.get_samples(batch_size)
+        states, actions, rewards, new_states, dones = self.get_samples(batch_size)
 
         if self.use_amp:
             from torch.cuda.amp import autocast
             with torch.no_grad(), autocast():
                 next_actions = self.policy_net(new_states).argmax(1, keepdim=True)
                 next_q = self.frozen_net(new_states).gather(1, next_actions)
-                target_q = rewards.unsqueeze(1) + (1 - terminateds.float().unsqueeze(1)) * self.gamma * next_q
+                target_q = rewards.unsqueeze(1) + (1 - dones.float().unsqueeze(1)) * self.gamma * next_q
 
             self.optimizer.zero_grad(set_to_none=True)
             with autocast():
@@ -162,7 +162,7 @@ class DoubleDQNAgent(BaseAgent):
             with torch.no_grad():
                 next_actions = self.policy_net(new_states).argmax(1, keepdim=True)
                 next_q = self.frozen_net(new_states).gather(1, next_actions)
-                target_q = rewards.unsqueeze(1) + (1 - terminateds.float().unsqueeze(1)) * self.gamma * next_q
+                target_q = rewards.unsqueeze(1) + (1 - dones.float().unsqueeze(1)) * self.gamma * next_q
             loss = self.loss_fn(current_q, target_q)
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()

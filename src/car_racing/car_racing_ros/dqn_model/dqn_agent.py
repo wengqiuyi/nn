@@ -69,7 +69,7 @@ class DQNAgent(BaseAgent):
         - 如果未结束: target = r + γ * max(Q_target(s', a'))
         """
         self.n_updates += 1
-        states, actions, rewards, new_states, terminateds = self.get_samples(batch_size)
+        states, actions, rewards, new_states, dones = self.get_samples(batch_size)
         use_double_q = bool(self.hyperparameters.get("double_q", False))
         max_grad_norm = self.hyperparameters.get("max_grad_norm", None)
 
@@ -81,7 +81,7 @@ class DQNAgent(BaseAgent):
                     next_q = self.frozen_net(new_states).gather(1, next_actions.unsqueeze(1)).view(-1)
                 else:
                     next_q = self.frozen_net(new_states).max(1)[0]
-                target_q = rewards + (1 - terminateds.float()) * self.gamma * next_q
+                target_q = rewards + (1 - dones.float()) * self.gamma * next_q
 
             self.optimizer.zero_grad(set_to_none=True)
             with autocast():
@@ -102,7 +102,7 @@ class DQNAgent(BaseAgent):
                     next_q = self.frozen_net(new_states).gather(1, next_actions.unsqueeze(1)).view(-1)
                 else:
                     next_q = self.frozen_net(new_states).max(1)[0]
-                target_q = rewards + (1 - terminateds.float()) * self.gamma * next_q
+                target_q = rewards + (1 - dones.float()) * self.gamma * next_q
             loss = self.loss_fn(current_q, target_q)
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()

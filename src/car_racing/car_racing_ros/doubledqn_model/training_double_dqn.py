@@ -64,6 +64,7 @@ def _parse_args():
     parser.add_argument("--dueling", type=int, default=1, choices=[0, 1])
     parser.add_argument("--amp", type=int, default=1, choices=[0, 1])
     parser.add_argument("--normalize-obs", type=int, default=1, choices=[0, 1])
+    parser.add_argument("--treat-truncated-as-terminal", type=int, default=-1, choices=[-1, 0, 1])
     return parser.parse_args()
 
 
@@ -125,6 +126,7 @@ driver = Agent(
         "dueling": bool(args.dueling),
         "amp": bool(args.amp),
         "normalize_obs": bool(args.normalize_obs),
+        **({} if args.treat_truncated_as_terminal < 0 else {"treat_truncated_as_terminal": bool(args.treat_truncated_as_terminal)}),
     }
 )
 

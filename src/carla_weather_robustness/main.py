@@ -3,17 +3,23 @@ CARLA恶劣天气鲁棒性测试与自适应感知系统
 自动遍历7种天气，输出鲁棒性评分报告
 """
 
+import sys
+# 添加CARLA Python API路径（根据实际安装位置修改）
+CARLA_PATH = r"F:\hutb\PythonAPI"
+sys.path.append(CARLA_PATH)
+
 import carla
 import numpy as np
 import cv2
 import json
 import logging
+import time
 from sklearn.cluster import DBSCAN
 from config.settings import (
     CARLA_HOST, CARLA_PORT, CARLA_TIMEOUT, CARLA_MAP,
     CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FOV,
     LIDAR_CHANNELS, LIDAR_RANGE,
-    WEATHER_PROFILES, STEPS_PER_WEATHER,
+    WEATHER_PROFILES, STEPS_PER_WEATHER, WEATHER_TRANSITION_STEPS,
     VISIBILITY_THRESHOLD_LOW, VISIBILITY_THRESHOLD_HIGH,
     LIDAR_CLUSTER_DISTANCE, LIDAR_MIN_CLUSTER_POINTS,
     IMAGE_BRIGHTNESS_LOW, IMAGE_BRIGHTNESS_HIGH,
@@ -22,6 +28,85 @@ from config.settings import (
     SAFE_DISTANCE, COLLISION_DISTANCE,
     PID_KP, PID_KI, PID_KD, MAX_SPEED, LOG_LEVEL,
 )
+
+
+class RoadFollowController:
+    """道路循迹控制器 - 使用CARLA Waypoint API沿道路中心线自动行驶"""
+
+    def __init__(self, vehicle, world):
+        self.vehicle = vehicle
+        self.world = world
+        self.map = world.get_map()
+        self._target_speed = MAX_SPEED * 0.5  # 默认循迹速度
+        self._waypoint_buffer = []  # 预读取前方路径点
+
+    def update_waypoints(self, lookahead_distance=10.0):
+        """更新前方路径点列表"""
+        current_transform = self.vehicle.get_transform()
+        current_location = current_transform.location
+        current_waypoint = self.map.get_waypoint(current_location)
+
+        # 获取前方多个路径点
+        self._waypoint_buffer = []
+        waypoint = current_waypoint
+        total_distance = 0.0
+
+        while total_distance < lookahead_distance:
+            # 沿道路方向前进2米
+            next_waypoints = waypoint.next(2.0)
+            if not next_waypoints:
+                break
+            waypoint = next_waypoints[0]
+            self._waypoint_buffer.append(waypoint)
+            total_distance += 2.0
+
+    def get_steering(self):
+        """计算沿道路行驶所需的转向角"""
+        if not self._waypoint_buffer:
+            self.update_waypoints()
+
+        if len(self._waypoint_buffer) < 2:
+            return 0.0  # 没有足够路径点，直行
+
+        # 获取车辆当前位置和朝向
+        vehicle_transform = self.vehicle.get_transform()
+        vehicle_location = vehicle_transform.location
+        vehicle_yaw = np.radians(vehicle_transform.rotation.yaw)
+
+        # 获取最近的前方路径点作为目标
+        target_waypoint = self._waypoint_buffer[0]
+        target_location = target_waypoint.transform.location
+
+        # 计算相对位置
+        dx = target_location.x - vehicle_location.x
+        dy = target_location.y - vehicle_location.y
+
+        # 计算到目标的角度（世界坐标系）
+        target_angle = np.arctan2(dy, dx)
+
+        # 计算相对于车辆朝向的角度差
+        angle_diff = target_angle - vehicle_yaw
+
+        # 归一化到 [-pi, pi]
+        while angle_diff > np.pi:
+            angle_diff -= 2 * np.pi
+        while angle_diff < -np.pi:
+            angle_diff += 2 * np.pi
+
+        # 将角度转换为转向值 [-1, 1]
+        # CARLA中转向角范围约为 [-1, 1]，对应约90度
+        max_steer_angle = np.pi / 2
+        steer = np.clip(angle_diff / max_steer_angle, -1.0, 1.0)
+
+        return float(steer)
+
+    def get_target_speed(self):
+        """获取循迹目标速度"""
+        return self._target_speed
+
+    def set_target_speed(self, speed):
+        """设置循迹目标速度"""
+        self._target_speed = max(0.0, min(speed, MAX_SPEED))
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(message)s")
 logger = logging.getLogger("WeatherRobustness")
@@ -34,12 +119,16 @@ WEATHER_LABELS = {
 
 
 class ImageQualityAssessor:
-    """图像质量评估：模糊度/亮度/可见度三维打分"""
+    """图像质量评估：多维度详细分解打分"""
 
     def assess(self, rgb_image):
         gray = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2GRAY)
+
+        # 1. 模糊度评分 (Laplacian方差)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         blur_score = np.clip(laplacian_var / 500.0, 0.0, 1.0)
+
+        # 2. 亮度评分
         mean_brightness = np.mean(gray)
         if mean_brightness < IMAGE_BRIGHTNESS_LOW:
             brightness_score = mean_brightness / IMAGE_BRIGHTNESS_LOW
@@ -47,12 +136,59 @@ class ImageQualityAssessor:
             brightness_score = (255.0 - mean_brightness) / (255.0 - IMAGE_BRIGHTNESS_HIGH)
         else:
             brightness_score = 1.0
-        visibility_score = np.clip(np.std(gray) / 80.0, 0.0, 1.0)
-        overall = blur_score * 0.3 + brightness_score * 0.3 + visibility_score * 0.4
+
+        # 3. 对比度评分 (灰度标准差)
+        contrast_score = np.clip(np.std(gray) / 80.0, 0.0, 1.0)
+
+        # 4. 可见度评分 (边缘检测比例)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_ratio = np.sum(edges > 0) / edges.size
+        visibility_score = np.clip(edge_ratio * 20, 0.0, 1.0)
+
+        # 5. 噪点评分 (基于高斯滤波差异)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        noise_est = np.mean(np.abs(gray.astype(float) - blurred.astype(float)))
+        noise_score = np.clip(1.0 - noise_est / 20.0, 0.0, 1.0)
+
+        # 6. 色彩饱和度评分
+        hsv = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
+        saturation = np.mean(hsv[:, :, 1])
+        saturation_score = np.clip(saturation / 128.0, 0.0, 1.0)
+
+        # 7. 雾霾影响评估 (暗通道先验简化版)
+        dark_channel = cv2.erode(gray, np.ones((15, 15)))
+        haze_ratio = np.mean(dark_channel) / 255.0
+        haze_score = 1.0 - haze_ratio
+
+        # 综合评分 (权重可调)
+        overall = (
+            blur_score * 0.15 +
+            brightness_score * 0.15 +
+            contrast_score * 0.1 +
+            visibility_score * 0.2 +
+            noise_score * 0.15 +
+            saturation_score * 0.05 +
+            haze_score * 0.2
+        )
+
         return {
-            "blur_score": float(blur_score), "brightness_score": float(brightness_score),
-            "visibility_score": float(visibility_score), "overall": float(overall),
-            "laplacian_var": float(laplacian_var), "mean_brightness": float(mean_brightness),
+            # 基础分数
+            "blur_score": float(blur_score),
+            "brightness_score": float(brightness_score),
+            "contrast_score": float(contrast_score),
+            "visibility_score": float(visibility_score),
+            "noise_score": float(noise_score),
+            "saturation_score": float(saturation_score),
+            "haze_score": float(haze_score),
+            # 综合评分
+            "overall": float(overall),
+            # 原始数值
+            "laplacian_var": float(laplacian_var),
+            "mean_brightness": float(mean_brightness),
+            "std_brightness": float(np.std(gray)),
+            "edge_ratio": float(edge_ratio),
+            "noise_est": float(noise_est),
+            "haze_ratio": float(haze_ratio),
         }
 
 
@@ -204,7 +340,14 @@ class WeatherRobustnessSystem:
         self.fusion_perceiver = AdaptiveFusionPerceiver()
         self.scorer = RobustnessScorer()
         self.pid = PIDController()
+        self.road_controller = None  # 道路循迹控制器
         self._spawn_point = None
+        self._current_weather_params = None  # 当前天气参数（用于渐变过渡）
+        self._target_weather_params = None  # 目标天气参数
+        self._transition_step = 0  # 过渡步数计数器
+        self._is_transitioning = False  # 是否正在过渡
+        self._is_stable = True  # 是否处于稳定期
+        self._stable_steps = 0  # 稳定期步数计数
 
     def connect(self):
         self.world = self.client.load_world(CARLA_MAP)
@@ -233,7 +376,10 @@ class WeatherRobustnessSystem:
         lidar_bp.set_attribute("rotation_frequency", "20")
         self.lidar = self.world.spawn_actor(lidar_bp, carla.Transform(carla.Location(x=0.0, z=2.8)), attach_to=self.vehicle)
         self.lidar.listen(self._on_lidar)
-        logger.info("车辆和传感器已就绪")
+
+        # 初始化道路循迹控制器
+        self.road_controller = RoadFollowController(self.vehicle, self.world)
+        logger.info("车辆和传感器已就绪，道路循迹控制器已初始化")
 
     def _on_camera(self, image):
         array = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(image.height, image.width, 4)
@@ -243,23 +389,79 @@ class WeatherRobustnessSystem:
         self._lidar_data = np.frombuffer(point_cloud.raw_data, dtype=np.float32).reshape(-1, 4)
 
     def apply_weather(self, name):
+        """设置目标天气"""
         profile = WEATHER_PROFILES[name]
-        weather = carla.WeatherParameters()
-        weather.cloudiness = profile["cloudiness"]
-        weather.precipitation = profile["precipitation"]
-        weather.precipitation_deposits = profile["precipitation_deposits"]
-        weather.wind_intensity = profile["wind_intensity"]
-        weather.fog_density = profile["fog_density"]
-        weather.fog_distance = profile["fog_distance"]
-        weather.wetness = profile["wetness"]
-        weather.sun_altitude_angle = profile["sun_altitude_angle"]
-        self.world.set_weather(weather)
+
+        # 初始化当前天气参数
+        if self._current_weather_params is None:
+            self._current_weather_params = self._get_current_weather_params()
+
+        # 设置目标天气参数
+        self._target_weather_params = profile.copy()
+        self._transition_step = 0
+        self._is_transitioning = False  # 先不开始过渡
+        self._is_stable = True  # 进入稳定期
+        self._stable_steps = 0
+
         self.scorer.start_weather(name)
-        # 重置车辆位置到出生点
-        self.vehicle.set_transform(self._spawn_point)
-        self.vehicle.set_target_velocity(carla.Vector3D(0, 0, 0))
-        self.vehicle.set_target_angular_velocity(carla.Vector3D(0, 0, 0))
-        logger.info(f"天气已切换: {WEATHER_LABELS.get(name, name)} [{name}]，车辆已重置")
+        logger.info(f"天气稳定期开始: {WEATHER_LABELS.get(name, name)} [{name}]，将持续{STEPS_PER_WEATHER - WEATHER_TRANSITION_STEPS}步后渐变过渡")
+
+    def _get_current_weather_params(self):
+        """获取当前天气参数"""
+        wp = self.world.get_weather()
+        return {
+            "cloudiness": wp.cloudiness,
+            "precipitation": wp.precipitation,
+            "precipitation_deposits": wp.precipitation_deposits,
+            "wind_intensity": wp.wind_intensity,
+            "fog_density": wp.fog_density,
+            "fog_distance": wp.fog_distance,
+            "wetness": wp.wetness,
+            "sun_altitude_angle": wp.sun_altitude_angle,
+        }
+
+    def _update_weather_transition(self):
+        """更新天气渐变过渡"""
+        if self._target_weather_params is None:
+            return
+
+        # 稳定期：先稳定WEATHER_TRANSITION_STEPS步后再开始过渡
+        if self._is_stable:
+            self._stable_steps += 1
+            if self._stable_steps >= (STEPS_PER_WEATHER - WEATHER_TRANSITION_STEPS):
+                self._is_stable = False
+                self._is_transitioning = True
+                logger.info(f"稳定期结束，天气渐变开始...")
+            return
+
+        # 渐变过渡
+        if not self._is_transitioning:
+            return
+
+        self._transition_step += 1
+        alpha = min(self._transition_step / WEATHER_TRANSITION_STEPS, 1.0)
+
+        # 线性插值
+        current = self._current_weather_params
+        target = self._target_weather_params
+
+        weather = carla.WeatherParameters()
+        weather.cloudiness = current["cloudiness"] + (target["cloudiness"] - current["cloudiness"]) * alpha
+        weather.precipitation = current["precipitation"] + (target["precipitation"] - current["precipitation"]) * alpha
+        weather.precipitation_deposits = current["precipitation_deposits"] + (target["precipitation_deposits"] - current["precipitation_deposits"]) * alpha
+        weather.wind_intensity = current["wind_intensity"] + (target["wind_intensity"] - current["wind_intensity"]) * alpha
+        weather.fog_density = current["fog_density"] + (target["fog_density"] - current["fog_density"]) * alpha
+        weather.fog_distance = current["fog_distance"] + (target["fog_distance"] - current["fog_distance"]) * alpha
+        weather.wetness = current["wetness"] + (target["wetness"] - current["wetness"]) * alpha
+        weather.sun_altitude_angle = current["sun_altitude_angle"] + (target["sun_altitude_angle"] - current["sun_altitude_angle"]) * alpha
+
+        self.world.set_weather(weather)
+
+        # 过渡完成
+        if self._transition_step >= WEATHER_TRANSITION_STEPS:
+            self._current_weather_params = target.copy()
+            self._is_transitioning = False
+            logger.info(f"天气渐变完成: {self._target_weather_params}")
 
     def get_severity(self):
         wp = self.world.get_weather()
@@ -288,6 +490,10 @@ class WeatherRobustnessSystem:
 
     def run_step(self, weather_name, step):
         self.world.tick()
+
+        # 更新天气渐变过渡
+        self._update_weather_transition()
+
         if self._camera_image is None or self._lidar_data is None:
             return
 
@@ -297,22 +503,32 @@ class WeatherRobustnessSystem:
         v = self.vehicle.get_velocity()
         speed = 3.6 * np.sqrt(v.x**2 + v.y**2 + v.z**2)
 
+        # 更新道路循迹路径点
+        self.road_controller.update_waypoints(lookahead_distance=15.0)
+        steer = self.road_controller.get_steering()
+
         throttle, brake = self._compute_control(fusion["nearest_distance"], speed)
-        self.vehicle.apply_control(carla.VehicleControl(throttle=throttle, brake=brake, steer=0.0))
+        self.vehicle.apply_control(carla.VehicleControl(throttle=throttle, brake=brake, steer=steer))
 
         collision = self._check_collision()
         self.scorer.record_step(weather_name, fusion, collision)
 
         # 每20步输出一次日志（每种天气约10行）
         if (step + 1) % 20 == 0:
+            if self._is_stable:
+                status_info = f"[稳定期: {self._stable_steps}/{STEPS_PER_WEATHER - WEATHER_TRANSITION_STEPS}]"
+            elif self._is_transitioning:
+                status_info = f"[过渡中: {int(self._transition_step/WEATHER_TRANSITION_STEPS*100)}%]"
+            else:
+                status_info = "[稳定期结束]"
             logger.info(
-                f"[{weather_name}] step={step+1}/{STEPS_PER_WEATHER}, "
+                f"[{weather_name}] step={step+1}/{STEPS_PER_WEATHER} {status_info}, "
                 f"融合={fusion['fusion_mode']}, 图像质量={fusion['image_quality']['overall']:.2f}, "
-                f"速度={speed:.1f}km/h"
+                f"速度={speed:.1f}km/h, 转向={steer:.2f}"
             )
-        self._draw_hud(fusion, speed, weather_name)
+        self._draw_hud(fusion, speed, weather_name, steer)
 
-    def _draw_hud(self, fusion, speed, weather_name):
+    def _draw_hud(self, fusion, speed, weather_name, steer=0.0):
         if self._camera_image is None:
             return
         display = self._camera_image.copy()
@@ -320,24 +536,87 @@ class WeatherRobustnessSystem:
         label = WEATHER_LABELS.get(weather_name, weather_name)
         iq = fusion["image_quality"]
 
-        overlay = display.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 140), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, display, 0.4, 0, display)
+        # ===== 雨天视觉效果 =====
+        if weather_name in ("light_rain", "heavy_rain", "night_rain"):
+            display = self._add_rain_effect(display, weather_name)
 
-        y = 28
-        cv2.putText(display, f"Weather: {label} [{weather_name}]", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        y += 28
-        cv2.putText(display, f"Speed: {speed:.1f} km/h  |  Obstacles: {fusion['num_obstacles']}  |  Nearest: {fusion['nearest_distance']:.1f}m", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-        y += 25
-        cv2.putText(display, f"Image: blur={iq['blur_score']:.2f}  bright={iq['brightness_score']:.2f}  vis={iq['visibility_score']:.2f}  overall={iq['overall']:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y += 25
+        overlay = display.copy()
+        cv2.rectangle(overlay, (0, 0), (w, 220), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
+
+        y = 25
+        # 天气名称 + 状态
+        if self._is_stable:
+            remaining = STEPS_PER_WEATHER - WEATHER_TRANSITION_STEPS - self._stable_steps
+            cv2.putText(display, f"Weather: {label} [{weather_name}] [稳定期-{remaining}步]", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        elif self._is_transitioning:
+            transition_pct = int(self._transition_step / WEATHER_TRANSITION_STEPS * 100)
+            cv2.putText(display, f"Weather: {label} [{weather_name}] -> {transition_pct}%", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
+        else:
+            cv2.putText(display, f"Weather: {label} [{weather_name}]", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        y += 22
+        cv2.putText(display, f"Speed: {speed:.1f} km/h  |  Steer: {steer:+.2f}  |  Obs: {fusion['num_obstacles']}  |  Near: {fusion['nearest_distance']:.1f}m", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        y += 20
+
+        # ===== 图像质量详细分解 =====
+        cv2.putText(display, f"Image Quality (Overall: {iq['overall']:.2f})", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 0), 1)
+        y += 18
+        cv2.putText(display, f"  blur={iq['blur_score']:.2f}  bright={iq['brightness_score']:.2f}  contrast={iq['contrast_score']:.2f}  vis={iq['visibility_score']:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        y += 16
+        cv2.putText(display, f"  noise={iq['noise_score']:.2f}  saturation={iq['saturation_score']:.2f}  haze={iq['haze_score']:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        y += 18
+
+        # 原始数值
+        cv2.putText(display, f"Raw: lap={iq['laplacian_var']:.1f}  mean={iq['mean_brightness']:.1f}  std={iq['std_brightness']:.1f}  edge={iq['edge_ratio']:.4f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
+        y += 18
+
         mode_color = (0, 255, 0) if fusion["fusion_mode"] == "camera_dominant" else (0, 0, 255) if fusion["fusion_mode"] == "lidar_dominant" else (0, 255, 255)
-        cv2.putText(display, f"Fusion: {fusion['fusion_mode']}  cam={fusion['camera_weight']:.2f}  lidar={fusion['lidar_weight']:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, mode_color, 2)
-        y += 25
-        cv2.putText(display, "CARLA Weather Robustness Test", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+        cv2.putText(display, f"Fusion: {fusion['fusion_mode']}  cam={fusion['camera_weight']:.2f}  lidar={fusion['lidar_weight']:.2f}", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, mode_color, 2)
+        y += 20
+        cv2.putText(display, "CARLA Weather Robustness Test", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
 
         cv2.imshow("Weather Robustness", cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
         cv2.waitKey(1)
+
+    def _add_rain_effect(self, frame, weather_name):
+        """添加雨天视觉效果：雨滴条纹 + 模糊"""
+        h, w = frame.shape[:2]
+
+        # 根据雨量强度设置效果强度
+        if weather_name == "light_rain":
+            intensity = 0.3
+            drop_count = 80
+        elif weather_name == "heavy_rain":
+            intensity = 0.6
+            drop_count = 200
+        else:  # night_rain
+            intensity = 0.5
+            drop_count = 150
+
+        # 添加镜头雨滴条纹效果
+        rain_overlay = np.zeros_like(frame)
+        np.random.seed(int(time.time() * 1000) % 1000)  # 随时间变化的随机种子
+
+        for _ in range(drop_count):
+            # 随机位置
+            x = np.random.randint(0, w)
+            y = np.random.randint(0, h)
+            # 雨滴条纹（斜线）
+            length = np.random.randint(5, 20)
+            thickness = np.random.randint(1, 3)
+            # 稍微倾斜的雨滴
+            angle = np.random.uniform(-0.3, 0.3)
+            dx = int(length * angle)
+            cv2.line(rain_overlay, (x, y), (x + dx, y + length), (200, 200, 200), thickness)
+
+        # 添加到画面
+        frame = cv2.addWeighted(frame, 1 - intensity * 0.5, rain_overlay, intensity * 0.5, 0)
+
+        # 轻度模糊模拟雨雾
+        if weather_name in ("heavy_rain", "night_rain"):
+            frame = cv2.GaussianBlur(frame, (5, 5), 0)
+
+        return frame
 
     def run(self):
         try:
@@ -368,10 +647,6 @@ class WeatherRobustnessSystem:
                     print(f"    评分={score['score']:.1f}, 碰撞={score['collisions']}, 碰撞率={score['collision_rate']:.3f}")
                     print(f"    图像质量={score['avg_image_quality']:.2f}, LiDAR主导比例={score['lidar_dominant_ratio']:.2f}")
             print("\n" + "=" * 60)
-
-            with open("robustness_report.json", "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
-            print("  报告已保存至 robustness_report.json\n")
 
         except KeyboardInterrupt:
             logger.info("用户中断")

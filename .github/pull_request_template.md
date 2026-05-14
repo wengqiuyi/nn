@@ -26,6 +26,7 @@
 ```bash
 export MPLCONFIGDIR=/tmp/matplotlib
 cd src/car_racing/car_racing_ros/dqn_model
+cd /home/zhibing/nn/nn/src/car_racing/car_racing_ros/dqn_model
 
 # truncated 视为 terminal（严格终止，不跨 episode bootstrap）
 python training_dqn.py \
@@ -47,6 +48,7 @@ python training_dqn.py \
 曲线对比（生成图片后附在 PR）：
 ```bash
 cd src/car_racing/car_racing_ros
+cd /home/zhibing/nn/nn/src/car_racing/car_racing_ros
 python plot_comparison.py \
   --logs training/logs/DQN_trunc_terminal.csv training/logs/DQN_trunc_bootstrap.csv \
   --labels trunc_terminal trunc_bootstrap \

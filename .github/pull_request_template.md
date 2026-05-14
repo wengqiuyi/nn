@@ -25,11 +25,9 @@
 示例命令（GPU 机器）：
 ```bash
 export MPLCONFIGDIR=/tmp/matplotlib
-cd src/car_racing/car_racing_ros/dqn_model
-cd /home/zhibing/nn/nn/src/car_racing/car_racing_ros/dqn_model
 
 # truncated 视为 terminal（严格终止，不跨 episode bootstrap）
-python training_dqn.py \
+python /home/zhibing/nn/nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py \
   --episodes 200 --max-timesteps 200000 --batch-size 64 \
   --report none --log-every 1 --log-filename DQN_trunc_terminal.csv \
   --skip-eval --seed 123 \
@@ -37,7 +35,7 @@ python training_dqn.py \
   --treat-truncated-as-terminal 1
 
 # truncated 不视为 terminal（允许 bootstrap）
-python training_dqn.py \
+python /home/zhibing/nn/nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py \
   --episodes 200 --max-timesteps 200000 --batch-size 64 \
   --report none --log-every 1 --log-filename DQN_trunc_bootstrap.csv \
   --skip-eval --seed 123 \
@@ -47,20 +45,18 @@ python training_dqn.py \
 
 曲线对比（生成图片后附在 PR）：
 ```bash
-cd src/car_racing/car_racing_ros
-cd /home/zhibing/nn/nn/src/car_racing/car_racing_ros
-python plot_comparison.py \
-  --logs training/logs/DQN_trunc_terminal.csv training/logs/DQN_trunc_bootstrap.csv \
+python /home/zhibing/nn/nn/src/car_racing/car_racing_ros/plot_comparison.py \
+  --logs /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/logs/DQN_trunc_terminal.csv /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/logs/DQN_trunc_bootstrap.csv \
   --labels trunc_terminal trunc_bootstrap \
   --metric reward --smooth 20 \
-  --out training/dqn_reward_trunc_cmp.png \
+  --out /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/dqn_reward_trunc_cmp.png \
   --title "DQN Reward (smooth=20)"
 
-python plot_comparison.py \
-  --logs training/logs/DQN_trunc_terminal.csv training/logs/DQN_trunc_bootstrap.csv \
+python /home/zhibing/nn/nn/src/car_racing/car_racing_ros/plot_comparison.py \
+  --logs /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/logs/DQN_trunc_terminal.csv /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/logs/DQN_trunc_bootstrap.csv \
   --labels trunc_terminal trunc_bootstrap \
   --metric loss --smooth 20 \
-  --out training/dqn_loss_trunc_cmp.png \
+  --out /home/zhibing/nn/nn/src/car_racing/car_racing_ros/training/dqn_loss_trunc_cmp.png \
   --title "DQN Loss (smooth=20)"
 ```
 

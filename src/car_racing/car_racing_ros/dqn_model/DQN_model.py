@@ -30,7 +30,7 @@ class SkipFrame(gym.Wrapper):
         for _ in range(self._skip):
             state, reward, terminated, truncated, info = self.env.step(action)
             total_reward += reward
-            if terminated:
+            if terminated or truncated:
                 break
         return state, total_reward, terminated, truncated, info
 
@@ -86,6 +86,7 @@ class Agent:
         self.hyperparameters.setdefault('epsilon_min', 0.05)
         self.hyperparameters.setdefault('lr', 0.0001)
         self.hyperparameters.setdefault('buffer_size', 100000)
+        self.hyperparameters.setdefault('treat_truncated_as_terminal', False)
         
         # Initialize components using hyperparameters
         self.gamma = self.hyperparameters['gamma']
@@ -130,15 +131,18 @@ class Agent:
                 raise ValueError("Specify a model name for loading.")
             self.load(os.path.join(self.save_dir, load_model))
 
-    def store(self, state, action, reward, new_state, terminated):
+    def store(self, state, action, reward, new_state, terminated, truncated=None):
         state_arr = np.asarray(state)
         new_state_arr = np.asarray(new_state)
+        if truncated is None:
+            truncated = False
         self.buffer.add(TensorDict({
                     "state": torch.as_tensor(state_arr),
                     "action": torch.tensor(action, dtype=torch.int64),
                     "reward": torch.tensor(reward, dtype=torch.float32),
                     "new_state": torch.as_tensor(new_state_arr),
                     "terminated": torch.tensor(terminated, dtype=torch.bool),
+                    "truncated": torch.tensor(truncated, dtype=torch.bool),
                     }, batch_size=[]))
 
     def get_samples(self, batch_size):
@@ -149,7 +153,13 @@ class Agent:
         actions = batch.get('action').to(self.device, dtype=torch.int64).squeeze()
         rewards = batch.get('reward').to(self.device, dtype=torch.float32).squeeze()
         terminateds = batch.get('terminated').to(self.device, dtype=torch.bool).squeeze()
-        return states, actions, rewards, new_states, terminateds
+        if 'truncated' in batch.keys():
+            truncateds = batch.get('truncated').to(self.device, dtype=torch.bool).squeeze()
+        else:
+            truncateds = torch.zeros_like(terminateds)
+        treat_truncated_as_terminal = bool(self.hyperparameters.get('treat_truncated_as_terminal', False))
+        dones = terminateds | (truncateds if treat_truncated_as_terminal else False)
+        return states, actions, rewards, new_states, dones
 
     def take_action(self, state):
         if np.random.rand() < self.epsilon:
@@ -170,13 +180,13 @@ class Agent:
     def update_net(self, batch_size):
         self.n_updates += 1
         states, actions, rewards, \
-            new_states, terminateds = self.get_samples(batch_size)
+            new_states, dones = self.get_samples(batch_size)
         action_values = self.updating_net(states)
         td_est = action_values.gather(1, actions.unsqueeze(1)).squeeze(1)
         
         with torch.no_grad():
             tar_action_values = self.frozen_net(new_states)
-        td_tar = rewards + (1 - terminateds.float()) * self.gamma*tar_action_values.max(1)[0]
+        td_tar = rewards + (1 - dones.float()) * self.gamma*tar_action_values.max(1)[0]
         loss = self.loss_fn(td_est, td_tar)
         self.optimizer.zero_grad()
         loss.backward()

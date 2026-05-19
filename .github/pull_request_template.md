@@ -8,6 +8,10 @@
    - 将 soft update 触发条件从“按更新次数 n_updates”改为“按环境交互步数 act_taken”，使 `update_target_every` 的语义与配置描述一致（按 step 而非按 update），避免目标网络更新过慢导致学习目标滞后。
 2. `src/car_racing/car_racing_ros/dqn_model/DQN_model.py`
    - 增加 `normalize_obs` 支持：当观测为 `uint8` 时自动归一化到 `[0, 1]`（采样训练与推理选动作都一致），改善输入数值尺度，提升训练稳定性。
+3. `src/car_racing/car_racing_ros/configs/dqn.yaml`
+   - 默认开启 `double_q: true`，降低 Q 值过估计，改善收敛稳定性。
+4. `src/car_racing/car_racing_ros/configs/double_dqn.yaml`
+   - 将 `update_target_every` 调整为 1（每步 Polyak soft update），减少目标网络滞后。
 
 ## 经过了什么样的测试?
 1. 操作系统：Linux
@@ -17,4 +21,4 @@
    - `src/car_racing/car_racing_ros/dqn_model/DQN_model.py`
 ## 运行效果
 在 CPU 环境做了最小 smoke test（`--max-timesteps 200`、`--eval-episodes 2`、`--seed 0`）确保流程可跑通并产出可复现指标。示例输出：
-1. DoubleDQN（节选）：`eval_score_mean ≈ -67.42`，并打印 `SUMMARY_JSON=...` 便于对比。
+1. DoubleDQN（节选）：`eval_score_mean ≈ -68.61`，并打印 `SUMMARY_JSON=...` 便于对比。

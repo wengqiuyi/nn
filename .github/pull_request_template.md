@@ -15,3 +15,6 @@
 3. 基础校验：`python -m py_compile` 对以下文件通过
    - `src/car_racing/car_racing_ros/doubledqn_model/doubledqn_agent.py`
    - `src/car_racing/car_racing_ros/dqn_model/DQN_model.py`
+## 运行效果
+在 CPU 环境做了最小 smoke test（`--max-timesteps 200`、`--eval-episodes 2`、`--seed 0`）确保流程可跑通并产出可复现指标。示例输出：
+1. DoubleDQN（节选）：`eval_score_mean ≈ -67.42`，并打印 `SUMMARY_JSON=...` 便于对比。

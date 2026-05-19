@@ -10,8 +10,11 @@
    - 增加 `normalize_obs` 支持：当观测为 `uint8` 时自动归一化到 `[0, 1]`（采样训练与推理选动作都一致），改善输入数值尺度，提升训练稳定性。
 3. `src/car_racing/car_racing_ros/configs/dqn.yaml`
    - 默认开启 `double_q: true`，降低 Q 值过估计，改善收敛稳定性。
+   - 将 `warmup_steps` 下调到 1000，让训练更早开始更新网络。
 4. `src/car_racing/car_racing_ros/configs/double_dqn.yaml`
    - 将 `update_target_every` 调整为 1（每步 Polyak soft update），减少目标网络滞后。
+   - 将 `tau` 设置为 0.005，使目标网络平滑跟随并保持训练稳定性。
+   - 将 `scheduler_step` 下调到 5000，让学习率衰减更早发生。
 
 ## 经过了什么样的测试?
 1. 操作系统：Linux

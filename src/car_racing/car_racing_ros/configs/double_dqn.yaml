@@ -37,7 +37,7 @@ hyperparameters:
                                  # cosine: 余弦退火
                                  # None: 不使用调度器
   
-  scheduler_step: 10000         # 步进调度的步长
+  scheduler_step: 5000          # 步进调度的步长
                                  # 每隔多少步衰减一次学习率
   
   scheduler_gamma: 0.9          # 衰减系数

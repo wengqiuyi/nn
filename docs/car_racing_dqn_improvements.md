@@ -2,18 +2,80 @@
 
 ---
 
+## 项目概述
+
+本项目围绕 Gymnasium `CarRacing-v2` 视觉控制任务，搭建并改进 DQN/DoubleDQN 训练框架，目标是把训练从“能跑通”提升到“可复现、可对比、可解释”，并以实验日志与可视化结果支撑算法迭代。
+
+项目输出包括：
+
+- 可配置训练入口（DQN/DoubleDQN），支持固定随机种子与关键开关；
+- 标准化日志与对比图（reward、loss、SPS、UPS 等）；
+- 模型权重与评估流程，便于复用与复现；
+- 面向后续扩展（PER、NoisyNet、n-step return 等）的工程底座。
+
+## 项目目标
+
+1. **可复现**：训练参数配置化，固定 `seed`，日志与产物可追溯，保证同配置可复跑。
+2. **可对比**：将关键改进点做成开关，支持 baseline vs improved、消融对照与多组实验对比绘图。
+3. **可解释**：不仅观察 reward，还记录 loss、回合长度与吞吐指标（SPS/UPS），让训练现象可分析。
+4. **可扩展**：在不破坏训练主流程的前提下，能快速加入更多 DQN 变体或训练技巧。
+5. **可落地**：在 GPU 环境下支持 AMP 等加速手段，能进行长时间稳定训练并输出可汇报结果。
+
+## 核心算法原理（DQN 系列）
+
+### 1. DQN：用深度网络逼近动作价值函数
+
+强化学习中，动作价值函数 `Q(s, a)` 表示在状态 `s` 下选择动作 `a` 后，未来累计回报的期望。DQN 使用神经网络 `Q(s, a; θ)` 来逼近该函数，并通过最小化 TD 误差训练网络。
+
+核心计算包含：
+
+- **ε-greedy 探索**：以概率 `ε` 随机探索，以 `1-ε` 选择 `argmax_a Q(s, a; θ)`。
+- **目标值（TD Target）**：`y = r + γ max_{a'} Q(s', a'; θ⁻)`。
+- **损失（TD Loss）**：常见为 Huber/MSE：`L = E[(Q(s, a; θ) - y)^2]`。
+
+为提升稳定性，DQN 通常配合两项关键机制：
+
+- **经验回放（Replay Buffer）**：从历史样本中随机采样训练，打破样本相关性，提高数据利用率。
+- **目标网络（Target Network）**：使用参数较慢更新的 `θ⁻` 计算目标值，降低“目标漂移”带来的不稳定。
+
+### 2. Double DQN：缓解 Q 值过估计
+
+标准 DQN 的 `max` 操作容易引入过估计。Double DQN 将“选动作”和“评估动作”拆开：
+
+- 先用在线网络选动作：`a* = argmax_{a'} Q(s', a'; θ)`
+- 再用目标网络评估：`y = r + γ Q(s', a*; θ⁻)`
+
+这通常能让学习目标更稳，减少价值函数发散风险。
+
+### 3. Dueling Network：分解状态价值与动作优势
+
+Dueling 结构将 `Q(s, a)` 分解为：
+
+- 状态价值 `V(s)`：状态本身的价值
+- 动作优势 `A(s, a)`：相对平均动作的优势
+
+常用聚合方式：
+
+`Q(s, a) = V(s) + (A(s, a) - mean_a A(s, a))`
+
+这样能让网络在“动作差异不大”的状态下更高效地学习，有助于视觉任务的稳定与样本效率。
+
+### 4. 本项目中的稳定性增强手段（与算法配套）
+
+- **观测归一化**：将 `uint8(0~255)` 缩放到 `float(0~1)`，改善 CNN 输入尺度。
+- **梯度裁剪**：限制梯度范数，缓解训练后期梯度爆炸与震荡。
+- **AMP**：在 GPU 上启用混合精度，在尽量不损失稳定性的前提下提高吞吐。
+
 ## 项目介绍
 
 这个项目面向一个具体问题：**如何让 CarRacing-v2（图像输入的驾驶控制任务）上的 DQN/DoubleDQN 训练，从“能跑”变成“可复现、可对比、可解释”**，并且能支撑后续持续迭代。
 
-### 这个项目具体做了什么
-
+### 项目具体做了什么
 1. **把训练做成一条标准管线**：环境预处理 → 采样与回放 → 更新网络 → 记录日志 → 画图对比 → 保存模型/评估。
 2. **把关键算法点模块化为开关**：`double_q`、`dueling`、`normalize_obs`、`max_grad_norm`、`amp` 等都可以通过参数控制，方便做对照实验。
 3. **把“实验结果”落到文件与指标上**：训练过程自动输出 CSV 日志，并对 reward、loss、SPS、UPS 做可视化与表格统计，确保结论可追溯。
 
 ### 项目范围（从输入到输出）
-
 - **任务与环境**：Gymnasium `CarRacing-v2`，图像观测输入，离散动作空间（`continuous=False`）。
 - **输入状态**：经过灰度化、缩放与帧堆叠后的图像序列（典型形状为 `(4, 84, 84)`）。
 - **输出策略**：离散动作（转向/加速/刹车/空动作），通过估计 `Q(s, a)` 选择动作。
@@ -23,7 +85,6 @@
   - 对比曲线图（PNG）。
 
 ### 代码结构与关键文件（可在演讲中直接指路）
-
 - **训练入口**
   - DQN：`nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py`
   - DoubleDQN：`nn/src/car_racing/car_racing_ros/doubledqn_model/training_double_dqn.py`
@@ -41,27 +102,7 @@
 - **对比绘图工具**
   - `nn/src/car_racing/car_racing_ros/plot_comparison.py`
 
-### 如何复现（演讲时可用作“我们怎么保证可复现”）
-
-```bash
-# 训练 DQN（示例：200 回合）
-python nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py --episodes 200 --seed 0
-
-# 训练 DoubleDQN（示例：200 回合）
-python nn/src/car_racing/car_racing_ros/doubledqn_model/training_double_dqn.py --episodes 200 --seed 0
-
-# 绘制 reward 对比图
-python nn/src/car_racing/car_racing_ros/plot_comparison.py \
-  --logs \
-    nn/src/car_racing/car_racing_ros/training/logs/DQN_baseline_long.csv \
-    nn/src/car_racing/car_racing_ros/training/logs/DQN_improved_long.csv \
-  --labels Baseline Improved \
-  --metric reward \
-  --smooth 20 \
-  --out nn/src/car_racing/car_racing_ros/training/dqn_reward_smooth20.png
-```
-
-### 汇报的核心亮点
+### 项目核心亮点
 1. **不只是论文复现**：把 Double DQN、Dueling Network、梯度裁剪、观测归一化等技术**从“零散在代码里”变成“可开关、可对比的模块”**；
 2. **不只有单条 reward 曲线**：补充 SPS、UPS 等工程指标与完整实验结果表格，让训练过程透明可分析；
 3. **不只有数字结果**：对关键术语、表格指标逐个解释，让结果可理解、可验证；
@@ -102,7 +143,6 @@ python nn/src/car_racing/car_racing_ros/plot_comparison.py \
 - 学习目标更稳；
 - reward 曲线通常更容易上升；
 - 在长时间训练中更不容易出现价值函数发散。
-
 #### 2. Dueling Network 结构
 `Dueling Network` 将 Q 值函数分解为两部分：
 - **状态价值 `V(s)`**：当前状态本身有多“好”；

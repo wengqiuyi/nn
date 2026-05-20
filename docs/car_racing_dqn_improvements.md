@@ -2,21 +2,72 @@
 
 ---
 
-## 汇报者与项目介绍
+## 项目介绍
 
-大家好，今天我汇报的主题是 **CarRacing 强化学习训练框架的系统性改进与实验验证**。
+这个项目面向一个具体问题：**如何让 CarRacing-v2（图像输入的驾驶控制任务）上的 DQN/DoubleDQN 训练，从“能跑”变成“可复现、可对比、可解释”**，并且能支撑后续持续迭代。
 
-我将通过本次汇报，说明我们如何把一个“能跑通”的 DQN/DoubleDQN 训练，提升为一个**可复现、可对比、可解释、可扩展**的实验平台，并展示在 CarRacing-v2 任务上的量化效果。
+### 这个项目具体做了什么
 
-### 本次汇报的核心亮点
+1. **把训练做成一条标准管线**：环境预处理 → 采样与回放 → 更新网络 → 记录日志 → 画图对比 → 保存模型/评估。
+2. **把关键算法点模块化为开关**：`double_q`、`dueling`、`normalize_obs`、`max_grad_norm`、`amp` 等都可以通过参数控制，方便做对照实验。
+3. **把“实验结果”落到文件与指标上**：训练过程自动输出 CSV 日志，并对 reward、loss、SPS、UPS 做可视化与表格统计，确保结论可追溯。
 
+### 项目范围（从输入到输出）
+
+- **任务与环境**：Gymnasium `CarRacing-v2`，图像观测输入，离散动作空间（`continuous=False`）。
+- **输入状态**：经过灰度化、缩放与帧堆叠后的图像序列（典型形状为 `(4, 84, 84)`）。
+- **输出策略**：离散动作（转向/加速/刹车/空动作），通过估计 `Q(s, a)` 选择动作。
+- **训练产物**：
+  - 训练日志（CSV）：reward、loss、epsilon、SPS、UPS、episode length；
+  - 模型权重（`.pt`）；
+  - 对比曲线图（PNG）。
+
+### 代码结构与关键文件（可在演讲中直接指路）
+
+- **训练入口**
+  - DQN：`nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py`
+  - DoubleDQN：`nn/src/car_racing/car_racing_ros/doubledqn_model/training_double_dqn.py`
+- **核心智能体与网络**
+  - DQN Agent：`nn/src/car_racing/car_racing_ros/dqn_model/dqn_agent.py`
+  - Dueling 网络结构：`nn/src/car_racing/car_racing_ros/dqn_model/base_agent.py`
+  - DoubleDQN Agent：`nn/src/car_racing/car_racing_ros/doubledqn_model/doubledqn_agent.py`
+- **配置文件（复现与对比的关键）**
+  - `nn/src/car_racing/car_racing_ros/configs/dqn.yaml`
+  - `nn/src/car_racing/car_racing_ros/configs/double_dqn.yaml`
+- **实验产物目录**
+  - 日志：`nn/src/car_racing/car_racing_ros/training/logs/`
+  - 权重：`nn/src/car_racing/car_racing_ros/training/saved_models/`
+  - 图像：`nn/src/car_racing/car_racing_ros/training/*.png`
+- **对比绘图工具**
+  - `nn/src/car_racing/car_racing_ros/plot_comparison.py`
+
+### 如何复现（演讲时可用作“我们怎么保证可复现”）
+
+```bash
+# 训练 DQN（示例：200 回合）
+python nn/src/car_racing/car_racing_ros/dqn_model/training_dqn.py --episodes 200 --seed 0
+
+# 训练 DoubleDQN（示例：200 回合）
+python nn/src/car_racing/car_racing_ros/doubledqn_model/training_double_dqn.py --episodes 200 --seed 0
+
+# 绘制 reward 对比图
+python nn/src/car_racing/car_racing_ros/plot_comparison.py \
+  --logs \
+    nn/src/car_racing/car_racing_ros/training/logs/DQN_baseline_long.csv \
+    nn/src/car_racing/car_racing_ros/training/logs/DQN_improved_long.csv \
+  --labels Baseline Improved \
+  --metric reward \
+  --smooth 20 \
+  --out nn/src/car_racing/car_racing_ros/training/dqn_reward_smooth20.png
+```
+
+### 汇报的核心亮点
 1. **不只是论文复现**：把 Double DQN、Dueling Network、梯度裁剪、观测归一化等技术**从“零散在代码里”变成“可开关、可对比的模块”**；
 2. **不只有单条 reward 曲线**：补充 SPS、UPS 等工程指标与完整实验结果表格，让训练过程透明可分析；
 3. **不只有数字结果**：对关键术语、表格指标逐个解释，让结果可理解、可验证；
 4. **是一个可迭代的工程底座**：为后续集成 PER、NoisyNet、n-step 等更多 DQN 变体预留了统一接口。
 
 ### 汇报大纲
-
 1. 项目背景与研究动机
 2. 系统性改进方案（算法 + 工程）
 3. 实验设计与结果来源
@@ -24,18 +75,9 @@
 5. 关键术语与表格解读
 6. 总结与未来展望
 
----
-
-本文对 `nn/src/car_racing/car_racing_ros` 目录下的 CarRacing DQN/DoubleDQN 训练框架进行系统整理，目标不是单纯“把模型跑起来”，而是把训练流程提升为一个**可复现、可对比、可解释、可扩展**的强化学习实验框架。
-
-本次文档重点补充三部分内容：
-1. 明确训练代码做了哪些算法与工程改进。
-2. 将已有实验日志中的结果整理为可直接汇报的量化结论。
-3. 对文中出现的关键术语、量化指标和效果分析表格做出解释，避免“有数字但难理解”的问题。
-
 ## 1. 项目背景与研究动机
 `CarRacing-v2` 是一个典型的强化学习视觉控制任务。智能体从图像观测中学习驾驶策略，目标是在赛道上尽可能稳定地前进并获得更高累计奖励。
-这个任务有几个典型难点：
+典型难点：
 1. **输入是像素图像**：状态维度高，特征提取依赖 CNN，训练开销明显高于低维状态任务。
 2. **奖励稀疏且波动较大**：智能体在训练初期经常无法形成有效驾驶行为，reward 曲线会剧烈震荡。
 3. **强化学习训练稳定性差**：经验回放、目标网络、探索率衰减等细节都会显著影响结果。
@@ -49,7 +91,6 @@
 ## 2. 系统性改进方案
 ### 2.1 算法层改进
 本项目并非简单替换算法名称，而是把多个稳定训练的重要机制做成了**可开关、可对比**的模块。
-
 #### 1. Double DQN 机制
 `Double DQN` 的核心作用是缓解标准 DQN 中常见的 **Q 值过估计（overestimation）** 问题。
 - 标准 DQN 往往使用同一个目标值过程同时“选动作”和“评估动作”，容易把某些动作价值估得过高。
@@ -66,7 +107,6 @@
 `Dueling Network` 将 Q 值函数分解为两部分：
 - **状态价值 `V(s)`**：当前状态本身有多“好”；
 - **动作优势 `A(s, a)`**：在该状态下，某个动作比平均动作“好多少”。
-
 这样做的意义在于：
 - 网络能先学会“这个状态值不值得继续”，再学“这个状态下哪个动作更优”；
 - 在很多状态下，不同动作差异不大，Dueling 结构通常能提升特征利用效率；

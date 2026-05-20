@@ -233,8 +233,8 @@ Dueling 结构将 `Q(s, a)` 分解为：
 
 ### 3.3 图像结果
 下面给出项目中已经生成的对比图，便于从趋势上观察 reward 和 loss 的变化。
-![Reward 对比图（smooth=20）](../src/car_racing/car_racing_ros/training/dqn_reward_smooth20.png)
-![Loss 对比图（smooth=20）](../src/car_racing/car_racing_ros/training/dqn_loss_smooth20.png)
+![Reward 对比图（smooth=20）](./dqn_reward_smooth20.png)
+![Loss 对比图（smooth=20）](./dqn_loss_smooth20.png)
 
 ## 4. 量化结果与效果分析
 ### 4.1 主实验结果表（200 Episodes）
